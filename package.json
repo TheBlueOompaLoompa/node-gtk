@@ -3,6 +3,7 @@
   "version": "0.7.0",
   "description": "GNOME Gtk+ bindings for NodeJS",
   "main": "lib/index.js",
+  "types": "@types/node-gtk/index.d.ts",
   "scripts": {
     "install": "if [ \"$(uname)\" = \"Darwin\" ] && [ \"$(which brew)\" != \"\" ]; then export PKG_CONFIG_PATH=$(brew --prefix libffi)/lib/pkgconfig; fi; node-pre-gyp install --fallback-to-build",
     "test": "mocha tests/__run__.js",

@@ -238,6 +238,55 @@ Local<Value> GErrorToV8 (GITypeInfo *type_info, GError *err) {
     return obj;
 }
 
+template<typename T>
+static bool isZero(void* value) {
+    return *(reinterpret_cast<T*>(value)) == 0;
+}
+
+static bool isZero(GIArgument &value, GITypeInfo *type_info) {
+    GITypeTag type_tag = g_type_info_get_tag (type_info);
+
+    switch (type_tag) {
+        case GI_TYPE_TAG_BOOLEAN:
+            ERROR("Boolean zero-terminated array not supported");
+            return false;
+        case GI_TYPE_TAG_INT8:
+            return isZero<gint8>(&value);
+        case GI_TYPE_TAG_UINT8:
+            return isZero<guint8>(&value);
+        case GI_TYPE_TAG_INT16:
+            return isZero<gint16>(&value);
+        case GI_TYPE_TAG_UINT16:
+            return isZero<guint16>(&value);
+        case GI_TYPE_TAG_INT32:
+            return isZero<gint32>(&value);
+        case GI_TYPE_TAG_UINT32:
+            return isZero<guint32>(&value);
+        case GI_TYPE_TAG_INT64:
+            return isZero<gint64>(&value);
+        case GI_TYPE_TAG_UINT64:
+            return isZero<guint64>(&value);
+        case GI_TYPE_TAG_FLOAT:
+            return isZero<float>(&value);
+        case GI_TYPE_TAG_DOUBLE:
+            return isZero<double>(&value);
+        case GI_TYPE_TAG_UNICHAR:
+            return isZero<gunichar>(&value);
+
+        case GI_TYPE_TAG_GTYPE:
+        case GI_TYPE_TAG_INTERFACE:
+        case GI_TYPE_TAG_ARRAY:
+        case GI_TYPE_TAG_VOID:
+        case GI_TYPE_TAG_UTF8:
+        case GI_TYPE_TAG_FILENAME:
+        case GI_TYPE_TAG_GLIST:
+        case GI_TYPE_TAG_GSLIST:
+        case GI_TYPE_TAG_GHASH:
+        case GI_TYPE_TAG_ERROR:
+            return isZero<gpointer>(&value);
+    }
+}
+
 Local<Value> ArrayToV8 (GITypeInfo *type_info, void* data, long length) {
 
     auto array = New<Array>();
@@ -253,20 +302,15 @@ Local<Value> ArrayToV8 (GITypeInfo *type_info, void* data, long length) {
     switch (array_type) {
         case GI_ARRAY_TYPE_C:
             {
-                if (length == -1) {
-                    if (g_type_info_is_zero_terminated (type_info)) {
-                        length = g_strv_length ((gchar **)data);
-                    }
-                    else {
-                        length = g_type_info_get_array_fixed_size (type_info);
-                        if (G_UNLIKELY (length == -1)) {
-                            g_critical ("Unable to determine array length for %p", data);
-                            length = 0;
-                            break;
-                        }
+                if (length == -1 && !g_type_info_is_zero_terminated (type_info)) {
+                    length = g_type_info_get_array_fixed_size (type_info);
+                    if (G_UNLIKELY (length == -1)) {
+                        g_critical ("Unable to determine array length for %p", data);
+                        length = 0;
+                        break;
                     }
                 }
-                g_assert (length >= 0);
+                // length remains -1 for zero-terminated array.
                 break;
             }
         case GI_ARRAY_TYPE_ARRAY:
@@ -301,9 +345,16 @@ Local<Value> ArrayToV8 (GITypeInfo *type_info, void* data, long length) {
 
     GIArgument value;
 
-    for (int i = 0; i < length; i++) {
+    for (int i = 0; ; i++) {
+        if (length != -1 && i >= length)
+            break;
+
         void** pointer = (void**)((ulong)data + i * item_size);
         memcpy(&value, pointer, item_size);
+
+        if (length == -1 && isZero(value, item_type_info))
+            break;
+
         Nan::Set(array, i, GIArgumentToV8(item_type_info, &value));
     }
 
@@ -697,7 +748,10 @@ bool V8ToGIArgument(GITypeInfo *type_info, GIArgument *arg, Local<Value> value, 
         arg->v_int = Nan::To<int32_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_INT64:
-        arg->v_int64 = Nan::To<int64_t> (value).ToChecked();
+        if (value->IsBigInt())
+            arg->v_int64 = value.As<v8::BigInt>()->Int64Value();
+        else
+            arg->v_int64 = Nan::To<int64_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_UINT8:
         arg->v_uint8 = Nan::To<uint32_t> (value).ToChecked();
@@ -709,7 +763,10 @@ bool V8ToGIArgument(GITypeInfo *type_info, GIArgument *arg, Local<Value> value, 
         arg->v_uint = Nan::To<uint32_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_UINT64:
-        arg->v_uint64 = Nan::To<int64_t> (value).ToChecked();
+        if (value->IsBigInt())
+            arg->v_uint64 = value.As<v8::BigInt>()->Uint64Value();
+        else
+            arg->v_uint64 = Nan::To<int64_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_FLOAT:
         arg->v_float = Nan::To<double> (value).ToChecked();
@@ -835,7 +892,10 @@ bool V8ToOutGIArgument(GITypeInfo *type_info, GIArgument *arg, Local<Value> valu
         *(gint*)arg->v_pointer = Nan::To<int32_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_INT64:
-        *(gint64*)arg->v_pointer = Nan::To<int64_t> (value).ToChecked();
+        if (value->IsBigInt())
+            *(gint64*)arg->v_pointer = value.As<v8::BigInt>()->Int64Value();
+        else
+            *(gint64*)arg->v_pointer = Nan::To<int64_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_UINT8:
         *(guint8*)arg->v_pointer = Nan::To<uint32_t> (value).ToChecked();
@@ -847,7 +907,10 @@ bool V8ToOutGIArgument(GITypeInfo *type_info, GIArgument *arg, Local<Value> valu
         *(guint*)arg->v_pointer = Nan::To<uint32_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_UINT64:
-        *(guint64*)arg->v_pointer = Nan::To<int64_t> (value).ToChecked();
+        if (value->IsBigInt())
+            *(guint64*)arg->v_pointer = value.As<v8::BigInt>()->Uint64Value();
+        else
+            *(guint64*)arg->v_pointer = Nan::To<int64_t> (value).ToChecked();
         break;
     case GI_TYPE_TAG_FLOAT:
         *(gfloat*)arg->v_pointer = Nan::To<double> (value).ToChecked();
@@ -909,19 +972,19 @@ bool CanConvertV8ToGIArgument(GITypeInfo *type_info, Local<Value> value, bool ma
     case GI_TYPE_TAG_VOID:
         return true;
     case GI_TYPE_TAG_BOOLEAN:
-        return true;
+        return value->IsBoolean () || value->IsNumber ();
     case GI_TYPE_TAG_INT8:
     case GI_TYPE_TAG_INT16:
     case GI_TYPE_TAG_INT32:
-    case GI_TYPE_TAG_INT64:
     case GI_TYPE_TAG_UINT8:
     case GI_TYPE_TAG_UINT16:
     case GI_TYPE_TAG_UINT32:
-    case GI_TYPE_TAG_UINT64:
     case GI_TYPE_TAG_FLOAT:
     case GI_TYPE_TAG_DOUBLE:
         return value->IsNumber ();
 
+    case GI_TYPE_TAG_INT64:
+    case GI_TYPE_TAG_UINT64:
     case GI_TYPE_TAG_GTYPE:
         return value->IsNumber () || value->IsBigInt ();
 
@@ -1293,6 +1356,10 @@ void FreeGIArgumentArray(GITypeInfo *type_info, GIArgument *arg, GITransfer tran
  */
 
 bool CanConvertV8ToGValue(GValue *gvalue, Local<Value> value) {
+    // void/null
+    if (G_VALUE_TYPE(gvalue) == G_TYPE_INVALID)
+        return value->IsNullOrUndefined();
+
     if (G_VALUE_HOLDS_BOOLEAN (gvalue)) {
         return value->IsBoolean() || value->IsNumber();
     } else if (G_VALUE_HOLDS_CHAR (gvalue)) {
@@ -1306,6 +1373,10 @@ bool CanConvertV8ToGValue(GValue *gvalue, Local<Value> value) {
     } else if (G_VALUE_HOLDS_LONG (gvalue)) {
         return value->IsNumber();
     } else if (G_VALUE_HOLDS_ULONG (gvalue)) {
+        return value->IsNumber();
+    } else if (G_VALUE_HOLDS_INT64 (gvalue)) {
+        return value->IsNumber();
+    } else if (G_VALUE_HOLDS_UINT64 (gvalue)) {
         return value->IsNumber();
     } else if (G_VALUE_HOLDS_FLOAT (gvalue)) {
         return value->IsNumber();
@@ -1336,6 +1407,22 @@ bool CanConvertV8ToGValue(GValue *gvalue, Local<Value> value) {
 }
 
 bool V8ToGValue(GValue *gvalue, Local<Value> value, bool mustCopy) {
+    if (!CanConvertV8ToGValue(gvalue, value)) {
+        auto maybeDetailString = Nan::ToDetailString(value);
+        Nan::Utf8String utf8String(
+            !maybeDetailString.IsEmpty() ?
+                maybeDetailString.ToLocalChecked() :
+                UTF8("[invalid value]")
+        );
+        Throw::TypeError("Cannot convert value \"%s\" to type %s",
+                *utf8String, G_VALUE_TYPE_NAME (gvalue));
+        return false;
+    }
+
+    // void/null
+    if (G_VALUE_TYPE(gvalue) == G_TYPE_INVALID)
+        return true;
+
     // by-value types
     if (G_VALUE_HOLDS_BOOLEAN (gvalue)) {
         g_value_set_boolean (gvalue, Nan::To<bool> (value).ToChecked());

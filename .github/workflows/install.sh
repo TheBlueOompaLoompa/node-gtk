@@ -7,6 +7,7 @@ set -o pipefail
 # also increase the package cache key in main.yaml
 
 if [[ $(uname -s) == 'Darwin' ]]; then
+    brew update
     brew install \
         gtk+3 \
         gobject-introspection \
@@ -21,7 +22,8 @@ if [[ $(uname -s) == 'Darwin' ]]; then
 fi;
 
 if [[ $(uname -s) == 'Linux' ]]; then
-    sudo apt install \
+    sudo apt update
+    sudo apt install --fix-missing \
         xvfb \
         libgirepository1.0-dev \
         gobject-introspection \
